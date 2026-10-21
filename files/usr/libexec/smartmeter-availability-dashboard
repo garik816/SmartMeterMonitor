@@ -1,0 +1,57 @@
+#!/usr/bin/python3
+"""Read-only, parameter-limited entrypoint for the LuCI dashboard."""
+
+from datetime import datetime
+import json
+import subprocess
+import sys
+
+
+def config(option, default):
+    try:
+        value = subprocess.check_output(
+            ["uci", "-q", "get", f"smartmeter-availability.main.{option}"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        ).strip()
+        return value or default
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return default
+
+
+def main():
+    if len(sys.argv) > 2:
+        print(json.dumps({"error": "Ожидается только дата YYYY-MM-DD"}, ensure_ascii=False))
+        return 0
+    day = sys.argv[1] if len(sys.argv) == 2 else datetime.now().date().isoformat()
+    try:
+        if datetime.strptime(day, "%Y-%m-%d").date().isoformat() != day:
+            raise ValueError()
+    except ValueError:
+        print(json.dumps({"error": "Некорректная дата"}, ensure_ascii=False))
+        return 0
+    try:
+        result = subprocess.run(
+            [
+            "/usr/bin/smartmeter-availability", "json",
+            "--host", config("host", "192.168.1.113"),
+            "--db", config("database", "/root/smartmeter-availability.sqlite3"),
+            "--interval", config("interval", "15"),
+            "--days", "365", "--day", day,
+            ],
+            capture_output=True, text=True, timeout=15, check=False,
+        )
+        if result.returncode == 0:
+            json.loads(result.stdout)
+            sys.stdout.write(result.stdout)
+            return 0
+        message = result.stderr.strip() or "Не удалось прочитать статистику"
+    except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
+        message = f"Не удалось прочитать статистику: {exc}"
+    print(json.dumps({"error": message}, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
