@@ -1,0 +1,11 @@
+{
+	"luci-app-my-scripts": {
+		"description": "Read SmartMeter availability statistics",
+		"read": {
+			"cgi-io": [ "exec" ],
+			"file": {
+				"/usr/libexec/smartmeter-availability-dashboard": [ "exec" ]
+			}
+		}
+	}
+}
