@@ -147,7 +147,18 @@ def save_targets(payload):
     with lock.open("w") as lock_file:
         fcntl.flock(lock_file, fcntl.LOCK_EX)
         previous = read_targets()
-        targets = validate_targets(payload, previous)
+        if not isinstance(payload, dict) or not isinstance(payload.get("remove_ids"), list):
+            raise ValueError("Обновите страницу мониторинга перед сохранением")
+        removed = payload["remove_ids"]
+        if any(not isinstance(ident, str) or not ID_RE.fullmatch(ident) for ident in removed):
+            raise ValueError("Некорректный список удаляемых проверок")
+        if len(removed) != len(set(removed)):
+            raise ValueError("Некорректный список удаляемых проверок")
+        targets = validate_targets(payload.get("targets"), previous)
+        old_ids = {item["id"] for item in previous}
+        new_ids = {item["id"] for item in targets}
+        if old_ids - new_ids != set(removed) or set(removed) & new_ids:
+            raise ValueError("Список проверок изменился. Обновите страницу и повторите сохранение")
         backup_fd, backup_name = tempfile.mkstemp(prefix="smartmeter-availability.", dir="/etc/config")
         os.close(backup_fd)
         shutil.copy2(CONFIG_FILE, backup_name)
@@ -161,6 +172,7 @@ def save_targets(payload):
                     if key != "id":
                         run("uci", "set", f"{PACKAGE}.{ident}.{key}={value}")
             run("uci", "commit", PACKAGE)
+            os.chmod(CONFIG_FILE, 0o600)
             run("/etc/init.d/smartmeter-availability", "restart")
         except Exception:
             subprocess.run(["uci", "-q", "revert", PACKAGE], capture_output=True, timeout=10)

@@ -60,6 +60,9 @@ const STYLES = `
 .sm-settings-grid label.sm-check input { width:auto; margin:0; }
 .sm-target-settings { border-top:1px solid rgba(127,127,127,.25); padding:12px 0; }
 .sm-target-settings:first-child { border-top:0; }
+.sm-target-settings summary { cursor:pointer; font-weight:600; padding:6px 0; }
+.sm-target-settings[open] summary { margin-bottom:8px; }
+.sm-target-new { border-left:3px solid #2563eb; padding-left:12px; }
 .sm-settings-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
 `;
 
@@ -123,6 +126,9 @@ return view.extend({
 		this.selectedDay = data.selected_day;
 		this.selectedTarget = data.selected_target;
 		this.targets = data.targets.map(item => Object.assign({}, item));
+		this.savedTargetIds = new Set(data.targets.map(item => item.id));
+		this.removedTargetIds = new Set();
+		this.editingTarget = data.selected_target;
 		this.targetsNode = E('div', { 'class': 'sm-targets' });
 		this.descriptionNode = E('p', { 'class': 'cbi-section-descr' });
 		this.settingsNode = E('div');
@@ -171,9 +177,9 @@ return view.extend({
 			E('div', { 'class': 'sm-panel' }, [
 				E('h3', 'Настройки проверок'),
 				E('p', { 'class': 'sm-muted' }, 'Интервал и тайм-аут задаются отдельно для каждого адреса. HTTP-проверка выполняет GET и сверяет итоговый код ответа.'),
+				E('button', { 'type': 'button', 'class': 'btn', 'click': () => this.addTarget() }, 'Добавить новую проверку'),
 				this.settingsNode,
 				E('div', { 'class': 'sm-settings-actions' }, [
-					E('button', { 'type': 'button', 'class': 'btn', 'click': () => this.addTarget() }, 'Добавить адрес'),
 					E('button', { 'type': 'button', 'class': 'btn cbi-button-positive', 'click': () => this.saveSettings() }, 'Сохранить и применить')
 				])
 			])
@@ -237,9 +243,16 @@ return view.extend({
 
 	renderSettings: function() {
 		this.settingsNode.replaceChildren(...this.targets.map(target => {
-			const panel = E('div', { 'class': 'sm-target-settings', 'data-id': target.id }, [
+			const isNew = !this.savedTargetIds.has(target.id);
+			const attrs = { 'class': 'sm-target-settings' + (isNew ? ' sm-target-new' : ''),
+				'data-id': target.id,
+				'toggle': ev => { if (ev.target.open) this.editingTarget = target.id; } };
+			if (target.id == this.editingTarget)
+				attrs.open = '';
+			const panel = E('details', attrs, [
+				E('summary', isNew ? 'Новая проверка — заполните поля ниже' :
+					target.name + ' · ' + (target.type == 'http' ? target.url : target.host)),
 				E('div', { 'class': 'sm-settings-actions' }, [
-					E('h4', target.name || 'Новая проверка'),
 					E('button', { 'type': 'button', 'class': 'btn cbi-button-negative',
 						'click': () => this.removeTarget(target.id) }, 'Удалить')
 				]),
@@ -281,11 +294,20 @@ return view.extend({
 
 	addTarget: function() {
 		this.targets = this.collectSettings();
-		const ident = 'mon_' + Date.now().toString(36);
-		this.targets.push({ id: ident, name: '', type: 'icmp', host: '', url: '',
+		let ident;
+		do {
+			ident = 'mon_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+		} while (this.targets.some(item => item.id == ident));
+		this.targets.unshift({ id: ident, name: '', type: 'icmp', host: '', url: '',
 			interface: 'br-lan', mac: '', interval: '30', timeout: '5',
 			expected_status: '200', retention_days: '30', enabled: '1' });
+		this.editingTarget = ident;
 		this.renderSettings();
+		const panel = this.settingsNode.querySelector('.sm-target-new');
+		if (panel) {
+			panel.scrollIntoView({ 'block': 'start', 'behavior': 'smooth' });
+			panel.querySelector('[data-field="name"]').focus();
+		}
 	},
 
 	removeTarget: function(ident) {
@@ -295,18 +317,25 @@ return view.extend({
 			return;
 		}
 		this.targets = targets.filter(item => item.id != ident);
+		if (this.savedTargetIds.has(ident))
+			this.removedTargetIds.add(ident);
+		if (this.editingTarget == ident)
+			this.editingTarget = this.targets[0].id;
 		this.renderSettings();
 	},
 
 	saveSettings: function() {
 		const targets = this.collectSettings();
-		return fs.exec_direct(CONFIG_PROGRAM, [JSON.stringify(targets)], 'json').then(result => {
+		const payload = { targets: targets, remove_ids: Array.from(this.removedTargetIds) };
+		return fs.exec_direct(CONFIG_PROGRAM, [JSON.stringify(payload)], 'json').then(result => {
 			if (!result || result.error)
 				throw new Error(result && result.error || 'Не удалось сохранить настройки');
 			this.targets = result.targets;
+			this.savedTargetIds = new Set(result.targets.map(item => item.id));
+			this.removedTargetIds.clear();
+			this.selectedTarget = result.targets.some(item => item.id == this.editingTarget) ?
+				this.editingTarget : result.targets[0].id;
 			this.renderSettings();
-			if (!targets.some(item => item.id == this.selectedTarget))
-				this.selectedTarget = targets[0].id;
 			ui.addNotification(null, E('p', 'Проверки сохранены и перезапущены.'), 'info');
 			return this.refresh();
 		}).catch(error => {

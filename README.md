@@ -8,7 +8,7 @@ LuCI availability monitor with independent checks for local devices, IP addresse
 - **ICMP:** Ping an IP address or hostname.
 - **HTTP/HTTPS:** GET a URL, follow up to five redirects, verify TLS and compare the final status code.
 
-Each check has its own name, enabled state, interval, timeout and retention period. The LuCI page lets you add, edit, remove and select checks. Each check keeps its history in a separate SQLite database. The original `main` check continues using `/root/smartmeter-availability.sqlite3`. Removing a check leaves its database on disk.
+Each check has its own name, enabled state, interval, timeout and retention period. The LuCI page opens a separate form for each new check and lets you edit, remove and select checks. Saving cannot remove an existing check unless it was explicitly deleted in the form. Each check keeps its history in a separate SQLite database. The original `main` check continues using `/root/smartmeter-availability.sqlite3`. Removing a check leaves its database on disk.
 
 Intervals: 5–3600 seconds. Timeouts: 1–60 seconds. Retention: 1–3650 days. Up to 30 checks can be configured.
 
