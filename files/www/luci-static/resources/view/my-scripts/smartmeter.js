@@ -215,9 +215,9 @@ return view.extend({
 			control = E('select', Object.assign(attrs, {
 				'change': ev => this.updateTypeFields(ev.target.closest('.sm-target-settings'))
 			}), [
-				E('option', { 'value': 'arp', 'selected': target.type == 'arp' }, 'ARP · локальное устройство'),
-				E('option', { 'value': 'icmp', 'selected': target.type == 'icmp' }, 'ICMP · ping'),
-				E('option', { 'value': 'http', 'selected': target.type == 'http' }, 'HTTP/HTTPS · веб-ресурс')
+				E('option', target.type == 'arp' ? { 'value': 'arp', 'selected': '' } : { 'value': 'arp' }, 'ARP · локальное устройство'),
+				E('option', target.type == 'icmp' ? { 'value': 'icmp', 'selected': '' } : { 'value': 'icmp' }, 'ICMP · ping'),
+				E('option', target.type == 'http' ? { 'value': 'http', 'selected': '' } : { 'value': 'http' }, 'HTTP/HTTPS · веб-ресурс')
 			]);
 		}
 		else {
@@ -247,7 +247,9 @@ return view.extend({
 					this.settingField(target, 'name', 'Название', 'text', { 'maxlength': 80 }),
 					this.settingField(target, 'type', 'Тип проверки', 'type'),
 					E('label', { 'class': 'sm-check' }, [
-						E('input', { 'type': 'checkbox', 'data-field': 'enabled', 'checked': target.enabled != '0' }),
+						E('input', target.enabled != '0' ?
+							{ 'type': 'checkbox', 'data-field': 'enabled', 'checked': '' } :
+							{ 'type': 'checkbox', 'data-field': 'enabled' }),
 						'Включена'
 					]),
 					E('div', { 'data-for': 'arp icmp' }, this.settingField(target, 'host', 'IP-адрес или имя хоста', 'text')),
