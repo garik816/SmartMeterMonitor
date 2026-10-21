@@ -52,6 +52,7 @@ const STYLES = `
 .sm-targets { display:flex; flex-wrap:wrap; gap:8px; margin:12px 0; }
 .sm-targets button { border:1px solid rgba(127,127,127,.35); border-radius:7px; padding:8px 11px; background:transparent; cursor:pointer; }
 .sm-targets button.sm-selected { border-color:#2563eb; background:rgba(37,99,235,.12); }
+.sm-targets button.sm-add { min-width:42px; font-size:1.5rem; font-weight:800; line-height:1; }
 .sm-targets small { display:block; color:#727a82; }
 .sm-settings-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(205px,1fr)); gap:10px 14px; }
 .sm-settings-grid label { display:block; font-size:.9rem; }
@@ -60,8 +61,7 @@ const STYLES = `
 .sm-settings-grid label.sm-check input { width:auto; margin:0; }
 .sm-target-settings { border-top:1px solid rgba(127,127,127,.25); padding:12px 0; }
 .sm-target-settings:first-child { border-top:0; }
-.sm-target-settings summary { cursor:pointer; font-weight:600; padding:6px 0; }
-.sm-target-settings[open] summary { margin-bottom:8px; }
+.sm-target-settings h4 { margin:0; }
 .sm-target-new { border-left:3px solid #2563eb; padding-left:12px; }
 .sm-settings-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
 `;
@@ -128,7 +128,7 @@ return view.extend({
 		this.targets = data.targets.map(item => Object.assign({}, item));
 		this.savedTargetIds = new Set(data.targets.map(item => item.id));
 		this.removedTargetIds = new Set();
-		this.editingTarget = data.selected_target;
+		this.lastServerTargets = data.targets;
 		this.targetsNode = E('div', { 'class': 'sm-targets' });
 		this.descriptionNode = E('p', { 'class': 'cbi-section-descr' });
 		this.settingsNode = E('div');
@@ -175,9 +175,8 @@ return view.extend({
 				this.dayNode
 			]),
 			E('div', { 'class': 'sm-panel' }, [
-				E('h3', 'Настройки проверок'),
+				E('h3', 'Настройки выбранной проверки'),
 				E('p', { 'class': 'sm-muted' }, 'Интервал и тайм-аут задаются отдельно для каждого адреса. HTTP-проверка выполняет GET и сверяет итоговый код ответа.'),
-				E('button', { 'type': 'button', 'class': 'btn', 'click': () => this.addTarget() }, 'Добавить новую проверку'),
 				this.settingsNode,
 				E('div', { 'class': 'sm-settings-actions' }, [
 					E('button', { 'type': 'button', 'class': 'btn cbi-button-positive', 'click': () => this.saveSettings() }, 'Сохранить и применить')
@@ -204,14 +203,36 @@ return view.extend({
 	},
 
 	refresh: function() {
-		return getData(this.selectedTarget, this.selectedDay).then(data => this.draw(data)).catch(error => {
+		if (!this.savedTargetIds.has(this.selectedTarget)) {
+			this.draw(this.newTargetData());
+			return Promise.resolve();
+		}
+		const requestedTarget = this.selectedTarget;
+		return getData(requestedTarget, this.selectedDay).then(data => {
+			if (this.selectedTarget == requestedTarget)
+				this.draw(data);
+		}).catch(error => {
 			ui.addNotification(null, E('p', 'Не удалось загрузить статистику: ' + error.message), 'error');
 		});
 	},
 
 	selectTarget: function(ident) {
+		if (!this.targets.some(item => item.id == ident))
+			return;
+		this.collectSettings();
 		this.selectedTarget = ident;
+		this.renderSettings();
 		return this.refresh();
+	},
+
+	newTargetData: function() {
+		const target = this.targets.find(item => item.id == this.selectedTarget);
+		const empty = { up: 0, down: 0, error: 0, availability: null };
+		return { unsaved: true, target: target, selected_target: target.id,
+			selected_day: this.selectedDay, today: dateKey(new Date()),
+			targets: this.lastServerTargets, current: null,
+			summary: { today: empty, week: empty, month: empty, all: empty },
+			days: [], minutes: [], outages: [] };
 	},
 
 	settingField: function(target, key, label, kind, extra) {
@@ -242,58 +263,65 @@ return view.extend({
 	},
 
 	renderSettings: function() {
-		this.settingsNode.replaceChildren(...this.targets.map(target => {
-			const isNew = !this.savedTargetIds.has(target.id);
-			const attrs = { 'class': 'sm-target-settings' + (isNew ? ' sm-target-new' : ''),
-				'data-id': target.id,
-				'toggle': ev => { if (ev.target.open) this.editingTarget = target.id; } };
-			if (target.id == this.editingTarget)
-				attrs.open = '';
-			const panel = E('details', attrs, [
-				E('summary', isNew ? 'Новая проверка — заполните поля ниже' :
-					target.name + ' · ' + (target.type == 'http' ? target.url : target.host)),
-				E('div', { 'class': 'sm-settings-actions' }, [
-					E('button', { 'type': 'button', 'class': 'btn cbi-button-negative',
-						'click': () => this.removeTarget(target.id) }, 'Удалить')
+		const target = this.targets.find(item => item.id == this.selectedTarget);
+		if (!target) {
+			this.settingsNode.replaceChildren();
+			return;
+		}
+		const isNew = !this.savedTargetIds.has(target.id);
+		const panel = E('div', {
+			'class': 'sm-target-settings' + (isNew ? ' sm-target-new' : ''),
+			'data-id': target.id
+		}, [
+			E('h4', isNew ? 'Новая проверка — заполните поля ниже' : target.name),
+			E('div', { 'class': 'sm-settings-actions' }, [
+				E('button', { 'type': 'button', 'class': 'btn cbi-button-negative',
+					'click': () => this.removeTarget(target.id) }, 'Удалить')
+			]),
+			E('div', { 'class': 'sm-settings-grid' }, [
+				this.settingField(target, 'name', 'Название', 'text', { 'maxlength': 80 }),
+				this.settingField(target, 'type', 'Тип проверки', 'type'),
+				E('label', { 'class': 'sm-check' }, [
+					E('input', target.enabled != '0' ?
+						{ 'type': 'checkbox', 'data-field': 'enabled', 'checked': '' } :
+						{ 'type': 'checkbox', 'data-field': 'enabled' }),
+					'Включена'
 				]),
-				E('div', { 'class': 'sm-settings-grid' }, [
-					this.settingField(target, 'name', 'Название', 'text', { 'maxlength': 80 }),
-					this.settingField(target, 'type', 'Тип проверки', 'type'),
-					E('label', { 'class': 'sm-check' }, [
-						E('input', target.enabled != '0' ?
-							{ 'type': 'checkbox', 'data-field': 'enabled', 'checked': '' } :
-							{ 'type': 'checkbox', 'data-field': 'enabled' }),
-						'Включена'
-					]),
-					E('div', { 'data-for': 'arp icmp' }, this.settingField(target, 'host', 'IP-адрес или имя хоста', 'text')),
-					E('div', { 'data-for': 'http' }, this.settingField(target, 'url', 'URL с http:// или https://', 'url')),
-					E('div', { 'data-for': 'arp' }, this.settingField(target, 'interface', 'Интерфейс для ARP', 'text')),
-					E('div', { 'data-for': 'arp' }, this.settingField(target, 'mac', 'Ожидаемый MAC (необязательно)', 'text')),
-					this.settingField(target, 'interval', 'Интервал, сек', 'number', { 'min': 5, 'max': 3600 }),
-					this.settingField(target, 'timeout', 'Тайм-аут, сек', 'number', { 'min': 1, 'max': 60 }),
-					E('div', { 'data-for': 'http' }, this.settingField(target, 'expected_status', 'Ожидаемый HTTP-код', 'number', { 'min': 100, 'max': 599 })),
-					this.settingField(target, 'retention_days', 'Хранить пробы, дней', 'number', { 'min': 1, 'max': 3650 })
-				])
-			]);
-			return panel;
-		}));
-		this.settingsNode.querySelectorAll('.sm-target-settings').forEach(panel => this.updateTypeFields(panel));
+				E('div', { 'data-for': 'arp icmp' }, this.settingField(target, 'host', 'IP-адрес или имя хоста', 'text')),
+				E('div', { 'data-for': 'http' }, this.settingField(target, 'url', 'URL с http:// или https://', 'url')),
+				E('div', { 'data-for': 'arp' }, this.settingField(target, 'interface', 'Интерфейс для ARP', 'text')),
+				E('div', { 'data-for': 'arp' }, this.settingField(target, 'mac', 'Ожидаемый MAC (необязательно)', 'text')),
+				this.settingField(target, 'interval', 'Интервал, сек', 'number', { 'min': 5, 'max': 3600 }),
+				this.settingField(target, 'timeout', 'Тайм-аут, сек', 'number', { 'min': 1, 'max': 60 }),
+				E('div', { 'data-for': 'http' }, this.settingField(target, 'expected_status', 'Ожидаемый HTTP-код', 'number', { 'min': 100, 'max': 599 })),
+				this.settingField(target, 'retention_days', 'Хранить пробы, дней', 'number', { 'min': 1, 'max': 3650 })
+			])
+		]);
+		this.settingsNode.replaceChildren(panel);
+		this.updateTypeFields(panel);
 	},
 
 	collectSettings: function() {
-		return Array.from(this.settingsNode.querySelectorAll('.sm-target-settings')).map(panel => {
+		const panel = this.settingsNode.querySelector('.sm-target-settings');
+		if (panel) {
 			const item = { id: panel.getAttribute('data-id') };
 			['name', 'type', 'host', 'url', 'interface', 'mac', 'interval', 'timeout',
 				'expected_status', 'retention_days'].forEach(key => {
 				item[key] = panel.querySelector('[data-field="' + key + '"]').value;
 			});
 			item.enabled = panel.querySelector('[data-field="enabled"]').checked ? '1' : '0';
+			this.targets = this.targets.map(target => target.id == item.id ? item : target);
+		}
+		return this.targets.map(target => {
+			const item = { id: target.id, enabled: target.enabled };
+			['name', 'type', 'host', 'url', 'interface', 'mac', 'interval', 'timeout',
+				'expected_status', 'retention_days'].forEach(key => item[key] = target[key]);
 			return item;
 		});
 	},
 
 	addTarget: function() {
-		this.targets = this.collectSettings();
+		this.collectSettings();
 		let ident;
 		do {
 			ident = 'mon_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -301,8 +329,9 @@ return view.extend({
 		this.targets.unshift({ id: ident, name: '', type: 'icmp', host: '', url: '',
 			interface: 'br-lan', mac: '', interval: '30', timeout: '5',
 			expected_status: '200', retention_days: '30', enabled: '1' });
-		this.editingTarget = ident;
+		this.selectedTarget = ident;
 		this.renderSettings();
+		this.refresh();
 		const panel = this.settingsNode.querySelector('.sm-target-new');
 		if (panel) {
 			panel.scrollIntoView({ 'block': 'start', 'behavior': 'smooth' });
@@ -319,9 +348,10 @@ return view.extend({
 		this.targets = targets.filter(item => item.id != ident);
 		if (this.savedTargetIds.has(ident))
 			this.removedTargetIds.add(ident);
-		if (this.editingTarget == ident)
-			this.editingTarget = this.targets[0].id;
+		if (this.selectedTarget == ident)
+			this.selectedTarget = this.targets[0].id;
 		this.renderSettings();
+		this.refresh();
 	},
 
 	saveSettings: function() {
@@ -333,8 +363,8 @@ return view.extend({
 			this.targets = result.targets;
 			this.savedTargetIds = new Set(result.targets.map(item => item.id));
 			this.removedTargetIds.clear();
-			this.selectedTarget = result.targets.some(item => item.id == this.editingTarget) ?
-				this.editingTarget : result.targets[0].id;
+			this.selectedTarget = result.targets.some(item => item.id == this.selectedTarget) ?
+				this.selectedTarget : result.targets[0].id;
 			this.renderSettings();
 			ui.addNotification(null, E('p', 'Проверки сохранены и перезапущены.'), 'info');
 			return this.refresh();
@@ -344,32 +374,44 @@ return view.extend({
 	},
 
 	renderTargets: function(data) {
-		this.targetsNode.replaceChildren(...data.targets.map(target => {
-			const current = target.current;
-			const state = target.enabled == '0' ? 'выключено' : !current ? 'нет данных' :
+		const serverTargets = new Map(data.targets.map(target => [target.id, target]));
+		const buttons = this.targets.map(target => {
+			const serverTarget = serverTargets.get(target.id);
+			const current = serverTarget && serverTarget.current;
+			const state = !this.savedTargetIds.has(target.id) ? 'не сохранено' :
+				target.enabled == '0' ? 'выключено' : !current ? 'нет данных' :
 				!current.monitor_running ? 'остановлено' : current.status == 'up' ? 'доступно' :
 				current.status == 'down' ? 'недоступно' : 'ошибка';
 			return E('button', { 'type': 'button',
-				'class': target.id == data.selected_target ? 'sm-selected' : '',
-				'click': () => this.selectTarget(target.id) }, [target.name, E('small', state)]);
-		}));
+				'class': target.id == this.selectedTarget ? 'sm-selected' : '',
+				'click': () => this.selectTarget(target.id) }, [target.name || 'Новая проверка', E('small', state)]);
+		});
+		buttons.push(E('button', { 'type': 'button', 'class': 'sm-add',
+			'title': 'Добавить проверку', 'aria-label': 'Добавить проверку',
+			'click': () => this.addTarget() }, '+'));
+		this.targetsNode.replaceChildren(...buttons);
 	},
 
 	draw: function(data) {
 		this.data = data;
+		if (!data.unsaved)
+			this.lastServerTargets = data.targets;
 		this.selectedDay = data.selected_day;
 		this.selectedTarget = data.selected_target;
 		this.renderTargets(data);
 		const target = data.target;
 		const endpoint = target.type == 'http' ? target.url : target.host;
 		const method = target.type == 'arp' ? 'ARP' : target.type == 'icmp' ? 'ICMP' : 'HTTP/HTTPS';
-		this.descriptionNode.textContent = target.name + ' · ' + endpoint + ' · ' + method +
+		this.descriptionNode.textContent = data.unsaved ?
+			'Новая проверка: задайте параметры и сохраните.' : target.name + ' · ' + endpoint + ' · ' + method +
 			' · интервал ' + target.interval + ' сек · тайм-аут ' + target.timeout +
 			' сек. Пустые периоды на графике означают отсутствие данных.';
 		const current = data.current;
 		let badgeClass = 'sm-badge-idle';
 		let label = 'Нет данных';
-		if (target.enabled == '0')
+		if (data.unsaved)
+			label = 'Сохраните проверку';
+		else if (target.enabled == '0')
 			label = 'Проверка выключена';
 		else if (current && !current.monitor_running)
 			label = 'Монитор остановлен';
