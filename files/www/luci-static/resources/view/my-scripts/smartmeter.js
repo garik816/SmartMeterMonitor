@@ -5,6 +5,7 @@
 'require ui';
 
 const PROGRAM = '/usr/libexec/smartmeter-availability-dashboard';
+const CONFIG_PROGRAM = '/usr/libexec/smartmeter-availability-config';
 const MONTHS = ['Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн', 'Июл', 'Авг', 'Сен', 'Окт', 'Ноя', 'Дек'];
 const WEEKDAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 const STYLES = `
@@ -48,11 +49,25 @@ const STYLES = `
 .sm-minute { width:10px; height:14px; }
 .sm-outages { margin:12px 0 0; padding-left:18px; }
 .sm-outages li { margin:5px 0; }
+.sm-targets { display:flex; flex-wrap:wrap; gap:8px; margin:12px 0; }
+.sm-targets button { border:1px solid rgba(127,127,127,.35); border-radius:7px; padding:8px 11px; background:transparent; cursor:pointer; }
+.sm-targets button.sm-selected { border-color:#2563eb; background:rgba(37,99,235,.12); }
+.sm-targets small { display:block; color:#727a82; }
+.sm-settings-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(205px,1fr)); gap:10px 14px; }
+.sm-settings-grid label { display:block; font-size:.9rem; }
+.sm-settings-grid input, .sm-settings-grid select { display:block; box-sizing:border-box; width:100%; margin-top:4px; }
+.sm-settings-grid label.sm-check { display:flex; align-items:center; gap:7px; }
+.sm-settings-grid label.sm-check input { width:auto; margin:0; }
+.sm-target-settings { border-top:1px solid rgba(127,127,127,.25); padding:12px 0; }
+.sm-target-settings:first-child { border-top:0; }
+.sm-settings-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
 `;
 
-function getData(day) {
+function getData(target, day) {
 	const args = [];
-	if (day)
+	if (target)
+		args.push(target);
+	if (target && day)
 		args.push(day);
 	return fs.exec_direct(PROGRAM, args, 'json').then(data => {
 		if (data && data.error)
@@ -106,6 +121,11 @@ return view.extend({
 
 	render: function(data) {
 		this.selectedDay = data.selected_day;
+		this.selectedTarget = data.selected_target;
+		this.targets = data.targets.map(item => Object.assign({}, item));
+		this.targetsNode = E('div', { 'class': 'sm-targets' });
+		this.descriptionNode = E('p', { 'class': 'cbi-section-descr' });
+		this.settingsNode = E('div');
 		this.statusNode = E('div');
 		this.cardsNode = E('div', { 'class': 'sm-cards' });
 		this.calendarNode = E('div');
@@ -115,13 +135,14 @@ return view.extend({
 			'class': 'cbi-input-text',
 			'change': ev => this.selectDay(ev.target.value)
 		});
+		this.renderSettings();
 		this.draw(data);
 		poll.add(() => this.refresh(), 30);
 		return E('div', [
 			E('style', { 'type': 'text/css' }, STYLES),
-			E('h2', 'SmartMeter'),
-			E('p', { 'class': 'cbi-section-descr' },
-				'Монитор проверяет 192.168.1.113 каждые 15 секунд по ARP. Цветные клетки показывают результаты проверок, а пустые периоды означают отсутствие данных.'),
+			E('h2', 'Мониторинг доступности'),
+			this.targetsNode,
+			this.descriptionNode,
 			this.statusNode,
 			this.cardsNode,
 			E('div', { 'class': 'sm-panel' }, [
@@ -146,6 +167,15 @@ return view.extend({
 					E('button', { 'type': 'button', 'class': 'btn', 'click': () => this.refresh() }, 'Обновить')
 				]),
 				this.dayNode
+			]),
+			E('div', { 'class': 'sm-panel' }, [
+				E('h3', 'Настройки проверок'),
+				E('p', { 'class': 'sm-muted' }, 'Интервал и тайм-аут задаются отдельно для каждого адреса. HTTP-проверка выполняет GET и сверяет итоговый код ответа.'),
+				this.settingsNode,
+				E('div', { 'class': 'sm-settings-actions' }, [
+					E('button', { 'type': 'button', 'class': 'btn', 'click': () => this.addTarget() }, 'Добавить адрес'),
+					E('button', { 'type': 'button', 'class': 'btn cbi-button-positive', 'click': () => this.saveSettings() }, 'Сохранить и применить')
+				])
 			])
 		]);
 	},
@@ -168,26 +198,157 @@ return view.extend({
 	},
 
 	refresh: function() {
-		return getData(this.selectedDay).then(data => this.draw(data)).catch(error => {
+		return getData(this.selectedTarget, this.selectedDay).then(data => this.draw(data)).catch(error => {
 			ui.addNotification(null, E('p', 'Не удалось загрузить статистику: ' + error.message), 'error');
 		});
+	},
+
+	selectTarget: function(ident) {
+		this.selectedTarget = ident;
+		return this.refresh();
+	},
+
+	settingField: function(target, key, label, kind, extra) {
+		const attrs = Object.assign({ 'data-field': key, 'class': 'cbi-input-text' }, extra || {});
+		let control;
+		if (kind == 'type') {
+			control = E('select', Object.assign(attrs, {
+				'change': ev => this.updateTypeFields(ev.target.closest('.sm-target-settings'))
+			}), [
+				E('option', { 'value': 'arp', 'selected': target.type == 'arp' }, 'ARP · локальное устройство'),
+				E('option', { 'value': 'icmp', 'selected': target.type == 'icmp' }, 'ICMP · ping'),
+				E('option', { 'value': 'http', 'selected': target.type == 'http' }, 'HTTP/HTTPS · веб-ресурс')
+			]);
+		}
+		else {
+			attrs.type = kind;
+			attrs.value = target[key] || '';
+			control = E('input', attrs);
+		}
+		return E('label', [label, control]);
+	},
+
+	updateTypeFields: function(panel) {
+		const kind = panel.querySelector('[data-field="type"]').value;
+		panel.querySelectorAll('[data-for]').forEach(node => {
+			node.hidden = node.getAttribute('data-for').split(' ').indexOf(kind) < 0;
+		});
+	},
+
+	renderSettings: function() {
+		this.settingsNode.replaceChildren(...this.targets.map(target => {
+			const panel = E('div', { 'class': 'sm-target-settings', 'data-id': target.id }, [
+				E('div', { 'class': 'sm-settings-actions' }, [
+					E('h4', target.name || 'Новая проверка'),
+					E('button', { 'type': 'button', 'class': 'btn cbi-button-negative',
+						'click': () => this.removeTarget(target.id) }, 'Удалить')
+				]),
+				E('div', { 'class': 'sm-settings-grid' }, [
+					this.settingField(target, 'name', 'Название', 'text', { 'maxlength': 80 }),
+					this.settingField(target, 'type', 'Тип проверки', 'type'),
+					E('label', { 'class': 'sm-check' }, [
+						E('input', { 'type': 'checkbox', 'data-field': 'enabled', 'checked': target.enabled != '0' }),
+						'Включена'
+					]),
+					E('div', { 'data-for': 'arp icmp' }, this.settingField(target, 'host', 'IP-адрес или имя хоста', 'text')),
+					E('div', { 'data-for': 'http' }, this.settingField(target, 'url', 'URL с http:// или https://', 'url')),
+					E('div', { 'data-for': 'arp' }, this.settingField(target, 'interface', 'Интерфейс для ARP', 'text')),
+					E('div', { 'data-for': 'arp' }, this.settingField(target, 'mac', 'Ожидаемый MAC (необязательно)', 'text')),
+					this.settingField(target, 'interval', 'Интервал, сек', 'number', { 'min': 5, 'max': 3600 }),
+					this.settingField(target, 'timeout', 'Тайм-аут, сек', 'number', { 'min': 1, 'max': 60 }),
+					E('div', { 'data-for': 'http' }, this.settingField(target, 'expected_status', 'Ожидаемый HTTP-код', 'number', { 'min': 100, 'max': 599 })),
+					this.settingField(target, 'retention_days', 'Хранить пробы, дней', 'number', { 'min': 1, 'max': 3650 })
+				])
+			]);
+			return panel;
+		}));
+		this.settingsNode.querySelectorAll('.sm-target-settings').forEach(panel => this.updateTypeFields(panel));
+	},
+
+	collectSettings: function() {
+		return Array.from(this.settingsNode.querySelectorAll('.sm-target-settings')).map(panel => {
+			const item = { id: panel.getAttribute('data-id') };
+			['name', 'type', 'host', 'url', 'interface', 'mac', 'interval', 'timeout',
+				'expected_status', 'retention_days'].forEach(key => {
+				item[key] = panel.querySelector('[data-field="' + key + '"]').value;
+			});
+			item.enabled = panel.querySelector('[data-field="enabled"]').checked ? '1' : '0';
+			return item;
+		});
+	},
+
+	addTarget: function() {
+		this.targets = this.collectSettings();
+		const ident = 'mon_' + Date.now().toString(36);
+		this.targets.push({ id: ident, name: '', type: 'icmp', host: '', url: '',
+			interface: 'br-lan', mac: '', interval: '30', timeout: '5',
+			expected_status: '200', retention_days: '30', enabled: '1' });
+		this.renderSettings();
+	},
+
+	removeTarget: function(ident) {
+		const targets = this.collectSettings();
+		if (targets.length <= 1) {
+			ui.addNotification(null, E('p', 'Нужна хотя бы одна проверка.'), 'warning');
+			return;
+		}
+		this.targets = targets.filter(item => item.id != ident);
+		this.renderSettings();
+	},
+
+	saveSettings: function() {
+		const targets = this.collectSettings();
+		return fs.exec_direct(CONFIG_PROGRAM, [JSON.stringify(targets)], 'json').then(result => {
+			if (!result || result.error)
+				throw new Error(result && result.error || 'Не удалось сохранить настройки');
+			this.targets = result.targets;
+			this.renderSettings();
+			if (!targets.some(item => item.id == this.selectedTarget))
+				this.selectedTarget = targets[0].id;
+			ui.addNotification(null, E('p', 'Проверки сохранены и перезапущены.'), 'info');
+			return this.refresh();
+		}).catch(error => {
+			ui.addNotification(null, E('p', 'Ошибка сохранения: ' + error.message), 'error');
+		});
+	},
+
+	renderTargets: function(data) {
+		this.targetsNode.replaceChildren(...data.targets.map(target => {
+			const current = target.current;
+			const state = target.enabled == '0' ? 'выключено' : !current ? 'нет данных' :
+				!current.monitor_running ? 'остановлено' : current.status == 'up' ? 'доступно' :
+				current.status == 'down' ? 'недоступно' : 'ошибка';
+			return E('button', { 'type': 'button',
+				'class': target.id == data.selected_target ? 'sm-selected' : '',
+				'click': () => this.selectTarget(target.id) }, [target.name, E('small', state)]);
+		}));
 	},
 
 	draw: function(data) {
 		this.data = data;
 		this.selectedDay = data.selected_day;
+		this.selectedTarget = data.selected_target;
+		this.renderTargets(data);
+		const target = data.target;
+		const endpoint = target.type == 'http' ? target.url : target.host;
+		const method = target.type == 'arp' ? 'ARP' : target.type == 'icmp' ? 'ICMP' : 'HTTP/HTTPS';
+		this.descriptionNode.textContent = target.name + ' · ' + endpoint + ' · ' + method +
+			' · интервал ' + target.interval + ' сек · тайм-аут ' + target.timeout +
+			' сек. Пустые периоды на графике означают отсутствие данных.';
 		const current = data.current;
 		let badgeClass = 'sm-badge-idle';
 		let label = 'Нет данных';
-		if (current && !current.monitor_running)
+		if (target.enabled == '0')
+			label = 'Проверка выключена';
+		else if (current && !current.monitor_running)
 			label = 'Монитор остановлен';
 		else if (current && current.status == 'up') {
 			badgeClass = 'sm-badge-up';
-			label = 'Устройство доступно';
+			label = 'Ресурс доступен';
 		}
 		else if (current && current.status == 'down') {
 			badgeClass = 'sm-badge-down';
-			label = 'Устройство недоступно';
+			label = 'Ресурс недоступен';
 		}
 		else if (current)
 			label = 'Ошибка проверки';

@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Record availability of one LAN device without using Telegram."""
+"""Record availability of one network or web resource."""
 
 import argparse
 from datetime import datetime, timedelta
@@ -43,13 +43,13 @@ def format_duration(seconds):
     return " ".join(parts)
 
 
-def probe(host, interface, expected_mac):
+def probe_arp(host, interface, expected_mac, timeout):
     command = [
         "nmap", "-sn", "-PR", "-n", "-e", interface,
-        "--max-retries", "1", "--host-timeout", "5s", "-oX", "-", host,
+        "--max-retries", "1", "--host-timeout", f"{timeout}s", "-oX", "-", host,
     ]
     try:
-        result = subprocess.run(command, capture_output=True, text=True, timeout=8, check=False)
+        result = subprocess.run(command, capture_output=True, text=True, timeout=timeout + 3, check=False)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return "error", "", f"ошибка запуска проверки: {type(exc).__name__}"
     if result.returncode != 0:
@@ -72,6 +72,52 @@ def probe(host, interface, expected_mac):
     if expected_mac and mac != expected_mac.lower():
         return "down", mac, f"ответил другой MAC: {mac or 'неизвестен'}"
     return "up", mac, "ответ ARP"
+
+
+def probe_icmp(host, timeout):
+    try:
+        result = subprocess.run(
+            ["ping", "-c", "1", "-W", str(timeout), host],
+            capture_output=True, text=True, timeout=timeout + 3, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return "error", "", f"ошибка запуска ping: {type(exc).__name__}"
+    if result.returncode == 0:
+        return "up", "", "ответ ICMP"
+    if result.returncode == 1:
+        return "down", "", "нет ответа ICMP"
+    return "error", "", f"ping завершился с кодом {result.returncode}"
+
+
+def probe_http(url, timeout, expected_status):
+    try:
+        result = subprocess.run(
+            ["curl", "--location", "--max-redirs", "5", "--silent", "--show-error",
+             "--output", "/dev/null", "--write-out", "%{http_code}",
+             "--max-time", str(timeout), "--connect-timeout", str(timeout),
+             "--user-agent", "OpenWrt-Availability/1.0", "--url", url],
+            capture_output=True, text=True, timeout=timeout + 3, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return "error", "", f"ошибка запуска curl: {type(exc).__name__}"
+    if result.returncode:
+        return "down", "", (result.stderr.strip() or f"curl: код {result.returncode}")[:240]
+    try:
+        code = int(result.stdout.strip())
+    except ValueError:
+        return "error", "", "curl вернул некорректный HTTP-код"
+    return (
+        ("up", "", f"HTTP {code}") if code == expected_status
+        else ("down", "", f"HTTP {code}, ожидался {expected_status}")
+    )
+
+
+def probe(args):
+    if args.type == "arp":
+        return probe_arp(args.host, args.interface, args.mac, args.timeout)
+    if args.type == "icmp":
+        return probe_icmp(args.host, args.timeout)
+    return probe_http(args.url, args.timeout, args.expected_status)
 
 
 def open_database(path, create=False):
@@ -391,7 +437,8 @@ def run_monitor(args):
     signal.signal(signal.SIGINT, stop_handler)
     connection = open_database(args.db, create=True)
     run_id = start_run(connection)
-    print(f"Мониторинг {args.host} запущен: каждые {args.interval} с; база {args.db}", flush=True)
+    endpoint = args.url if args.type == "http" else args.host
+    print(f"Мониторинг {endpoint} ({args.type}) запущен: каждые {args.interval} с; база {args.db}", flush=True)
     next_check = time.monotonic()
     last_prune_day = None
     try:
@@ -401,7 +448,7 @@ def run_monitor(args):
                 time.sleep(min(delay, 1))
                 continue
             timestamp = int(time.time())
-            status, mac, reason = probe(args.host, args.interface, args.mac)
+            status, mac, reason = probe(args)
             changed = record_sample(connection, run_id, timestamp, status, mac, reason)
             try:
                 connection = restore_missing_database(connection, args.db)
@@ -424,17 +471,25 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("run", "check", "status", "history", "json"))
     parser.add_argument("--host", default="192.168.1.113")
+    parser.add_argument("--url", default="")
+    parser.add_argument("--type", choices=("arp", "icmp", "http"), default="arp")
     parser.add_argument("--interface", default="br-lan")
     parser.add_argument("--mac", default="18:DE:50:E1:86:32")
     parser.add_argument("--interval", type=int, default=15)
+    parser.add_argument("--timeout", type=int, default=5)
+    parser.add_argument("--expected-status", type=int, default=200)
     parser.add_argument("--retention-days", type=int, default=90)
     parser.add_argument("--db", default=DEFAULT_DB)
     parser.add_argument("--limit", type=int, default=10)
     parser.add_argument("--days", type=int, default=365)
     parser.add_argument("--day", default=None)
     args = parser.parse_args()
-    if not 5 <= args.interval <= 3600 or not 1 <= args.retention_days <= 3650 or not 1 <= args.days <= 366:
-        parser.error("interval должен быть 5..3600, retention-days 1..3650, days 1..366")
+    if (not 5 <= args.interval <= 3600 or not 1 <= args.timeout <= 60 or
+            not 1 <= args.retention_days <= 3650 or not 1 <= args.days <= 366 or
+            not 100 <= args.expected_status <= 599):
+        parser.error("interval 5..3600, timeout 1..60, retention-days 1..3650, days 1..366, expected-status 100..599")
+    if args.type == "http" and not args.url.startswith(("http://", "https://")):
+        parser.error("для HTTP нужна URL с http:// или https://")
     if args.day:
         try:
             if datetime.strptime(args.day, "%Y-%m-%d").date().isoformat() != args.day:
@@ -443,8 +498,9 @@ def main():
             parser.error("day должен быть в формате YYYY-MM-DD")
     try:
         if args.command == "check":
-            status, mac, reason = probe(args.host, args.interface, args.mac)
-            print(f"{args.host}: {status}; {reason}" + (f"; MAC {mac}" if mac else ""))
+            status, mac, reason = probe(args)
+            endpoint = args.url if args.type == "http" else args.host
+            print(f"{endpoint}: {status}; {reason}" + (f"; MAC {mac}" if mac else ""))
             return 0 if status == "up" else 1 if status == "down" else 2
         if args.command == "run":
             run_monitor(args)

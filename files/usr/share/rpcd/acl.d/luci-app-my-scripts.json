@@ -1,10 +1,18 @@
 {
 	"luci-app-my-scripts": {
-		"description": "Read SmartMeter availability statistics",
+		"description": "Read and configure availability monitors",
 		"read": {
 			"cgi-io": [ "exec" ],
 			"file": {
-				"/usr/libexec/smartmeter-availability-dashboard": [ "exec" ]
+				"/usr/libexec/smartmeter-availability-dashboard": [ "exec" ],
+				"/usr/libexec/smartmeter-availability-dashboard *": [ "exec" ]
+			}
+		},
+		"write": {
+			"cgi-io": [ "exec" ],
+			"file": {
+				"/usr/libexec/smartmeter-availability-config": [ "exec" ],
+				"/usr/libexec/smartmeter-availability-config *": [ "exec" ]
 			}
 		}
 	}
