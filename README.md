@@ -1,5 +1,11 @@
 # SmartMeterMonitor for OpenWrt
 
+> **Основной объединённый проект — [BlackoutMonitor](https://github.com/garik816/BlackoutMonitor).**
+>
+> Мониторинг доступности, графики отключений, сравнение плана с фактом и аналитика очередей развиваются вместе в BlackoutMonitor. Этот репозиторий сохранён с исходным кодом и историей предыдущей версии.
+
+---
+
 LuCI availability monitor with independent checks for local devices, IP addresses and web resources. The first commit preserves the original single-target version.
 
 ## Checks
