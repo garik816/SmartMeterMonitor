@@ -1,36 +1,138 @@
-# SmartMeterMonitor for OpenWrt
+<div align="center">
+
+![SmartMeterMonitor](docs/images/hero.svg)
+
+**Независимые проверки устройств и сайтов, история доступности и детализация в LuCI.**
+
+![OpenWrt](https://img.shields.io/badge/OpenWrt-LuCI-00b5e2?style=flat-square)
+![Python](https://img.shields.io/badge/Python-3-3776ab?style=flat-square)
+![Storage](https://img.shields.io/badge/Storage-SQLite-4169e1?style=flat-square)
+![Checks](https://img.shields.io/badge/Checks-ARP%20%C2%B7%20ICMP%20%C2%B7%20HTTP(S)-56a86b?style=flat-square)
+
+[Возможности](#возможности) · [Установка](docs/INSTALL.md) · [Интерфейс](#интерфейс) · [Основной проект](https://github.com/garik816/BlackoutMonitor)
+
+</div>
 
 > **Основной объединённый проект — [BlackoutMonitor](https://github.com/garik816/BlackoutMonitor).**
->
-> Мониторинг доступности, графики отключений, сравнение плана с фактом и аналитика очередей развиваются вместе в BlackoutMonitor. Этот репозиторий сохранён с исходным кодом и историей предыдущей версии.
+> Он включает этот монитор доступности, графики отключений, сравнение плана с фактом и аналитику очередей. SmartMeterMonitor сохраняется как отдельная версия монитора со своим исходным кодом и историей коммитов.
 
----
+## Наблюдение за доступностью
 
-LuCI availability monitor with independent checks for local devices, IP addresses and web resources. The first commit preserves the original single-target version.
+SmartMeterMonitor выполняет независимые проверки локальных устройств, IP-адресов и веб-ресурсов. Для каждого адреса можно задать свой интервал и тайм-аут, посмотреть состояние сейчас и найти периоды доступности или сбоев в истории.
 
-## Checks
+Откройте **Services → Мониторинг доступности** в LuCI: выберите ресурс сверху, день в календаре и нужный участок поминутной сетки.
 
-- **ARP:** IPv4 address on a local interface, with an optional expected MAC address.
-- **ICMP:** Ping an IP address or hostname.
-- **HTTP/HTTPS:** GET a URL, follow up to five redirects, verify TLS and compare the final status code.
+## Интерфейс
 
-Each check has its own name, enabled state, interval, timeout and retention period. The LuCI page opens a separate form for each new check and lets you edit, remove and select checks. Saving cannot remove an existing check unless it was explicitly deleted in the form. Each check keeps its history in a separate SQLite database. The original `main` check continues using `/root/smartmeter-availability.sqlite3`. Removing a check leaves its database on disk.
+![Календарь и статистика доступности](docs/images/dashboard.png)
 
-Intervals: 5–3600 seconds. Timeouts: 1–60 seconds. Retention: 1–3650 days. Up to 30 checks can be configured.
+*На снимках — рабочий интерфейс с демонстрационными данными, документальными IP-адресами и условным MAC. Личная история, реальные настройки и базы пользователя в репозиторий не включены.*
 
-## Install
+<details>
+<summary><strong>Поминутная детализация и периоды доступности</strong></summary>
 
-Requires OpenWrt with LuCI, rpcd, Python 3, `nmap`, `curl` and `ping`. Copy the contents of `files/` to `/` on the router, keeping paths and executable bits. For a new installation, copy `files/etc/config/smartmeter-availability.example` to `/etc/config/smartmeter-availability` and edit it. For an existing installation, keep the current config and database; the new service reads the original `main` section.
+![Проверки по минутам и границы периодов](docs/images/day-detail.png)
 
-Then run:
+</details>
+
+<details>
+<summary><strong>Настройки выбранной проверки</strong></summary>
+
+![Отдельные настройки устройства](docs/images/settings.png)
+
+</details>
+
+<details>
+<summary><strong>Интерфейс на телефоне</strong></summary>
+
+<img src="docs/images/mobile.png" alt="Мобильный интерфейс SmartMeterMonitor" width="360">
+
+</details>
+
+## Возможности
+
+### Проверять разными способами
+
+| Тип | Что проверяется | Когда полезен |
+| --- | --- | --- |
+| **ARP** | Ответ устройства в локальной сети; при необходимости — совпадение MAC | SmartMeter, локальные устройства и датчики |
+| **ICMP** | Ответ IP-адреса или имени через ping | Шлюзы и сетевые узлы |
+| **HTTP/HTTPS** | GET с переходами, проверкой TLS и ожидаемого HTTP-кода | Сайты, панели и веб-сервисы |
+
+### Видеть историю
+
+- Статус ресурса и время последнего измерения.
+- Статистика за сегодня, 7 дней, 30 дней и всё время.
+- Годовая сетка активности с выбором дня.
+- Поминутная детализация: доступность, недоступность, ошибки и отсутствие данных.
+- Отдельные списки **периодов доступности и сбоев** с временем начала, окончания и длительностью.
+- Отметка о прерванном наблюдении, если нет подтверждённого времени окончания периода.
+
+### Управлять несколькими ресурсами
+
+- До **30 независимых проверок**.
+- Отдельная история SQLite для каждого адреса.
+- Добавление кнопкой **+** рядом с существующими проверками.
+- Параметры только выбранного ресурса; черновики сохраняются при переключении вкладок.
+- Сохранение полного списка с явным указанием удалённых проверок.
+- Удаление проверки не удаляет её базу истории.
+
+| Параметр | Допустимые значения |
+| --- | --- |
+| Интервал проверки | 5–3600 секунд |
+| Тайм-аут | 1–60 секунд |
+| Ожидаемый HTTP-код | 100–599 |
+| Хранение проб | 1–3650 дней |
+
+> Доступность ресурса и ошибка выполнения проверки учитываются отдельно. Пустой участок сетки означает отсутствие данных; пауза мониторинга не превращается в подтверждённый период доступности.
+
+## Начать работу
+
+Проверенная среда — **OpenWrt 25.12.6 x86/64 с LuCI**. Проект устанавливается копированием исходных файлов; готовый `.ipk`/`.apk` пакет пока не поставляется.
+
+1. Подготовьте Python 3, SQLite, XML, `nmap`, `curl` и `ping`.
+2. Скопируйте `files/` на роутер и настройте первый адрес.
+3. Включите службу и откройте **Services → Мониторинг доступности**.
+
+**[Пошаговая установка и обновление →](docs/INSTALL.md)**
+
+В поставке находится только пример конфигурации. Существующий `/etc/config/smartmeter-availability` не заменяется автоматически, а проверка `main` продолжает использовать прежнюю базу.
+
+## Данные и границы наблюдений
+
+| Что | Где хранится |
+| --- | --- |
+| Параметры проверок | `/etc/config/smartmeter-availability` |
+| История основной проверки `main` | `/root/smartmeter-availability.sqlite3` |
+| История остальных проверок | `/root/smartmeter-<id>.sqlite3` |
+
+Границы периодов строятся по наблюдавшимся пробам. Перезапуск службы, длительный пробел или устаревшие измерения не продолжают период как будто проверки всё это время выполнялись. Период, начавшийся до полуночи, сохраняет фактическое начало при просмотре выбранного дня.
+
+Календарь показывает последние 365 дней; заполнение зависит от накопленной истории и срока хранения каждой проверки.
+
+## Проверка исходников
 
 ```sh
-chmod 755 /usr/bin/smartmeter-availability /usr/libexec/smartmeter-availability-dashboard /usr/libexec/smartmeter-availability-config /etc/init.d/smartmeter-availability
-/etc/init.d/rpcd restart
-/etc/init.d/smartmeter-availability enable
-/etc/init.d/smartmeter-availability restart
+python3 tests/test_availability.py
 ```
 
-Open **Services → Мониторинг доступности** in LuCI.
+Проверки охватывают завершённые и текущие периоды, переход через полночь, перезапуски, устаревшие измерения и пропуски проб. Тестовые базы создаются во временном каталоге.
 
-The live SQLite databases, router backups and credentials are excluded from this repository.
+## Структура проекта
+
+```text
+files/
+├── etc/config/                        # Пример конфигурации
+├── etc/init.d/                        # Служба procd
+├── usr/bin/                           # Сборщик доступности
+├── usr/libexec/                       # Чтение статистики и сохранение настроек
+├── usr/share/luci/menu.d/              # Пункт меню LuCI
+├── usr/share/rpcd/acl.d/               # Права доступа
+├── usr/share/ucode/luci/template/      # Версионирование ресурса интерфейса
+└── www/luci-static/resources/view/     # Страница мониторинга
+
+docs/                                  # Инструкция и изображения
+tests/                                 # Проверки границ периодов
+```
+
+Для графиков отключений и сопоставления очередей используйте **[BlackoutMonitor](https://github.com/garik816/BlackoutMonitor)** — основной проект для совместного развития обоих разделов.
