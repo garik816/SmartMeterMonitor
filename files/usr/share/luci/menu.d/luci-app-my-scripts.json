@@ -3,7 +3,7 @@
 		"title": "Мониторинг доступности",
 		"order": 10,
 		"action": {
-			"type": "view",
+			"type": "template",
 			"path": "my-scripts/smartmeter"
 		},
 		"depends": {
