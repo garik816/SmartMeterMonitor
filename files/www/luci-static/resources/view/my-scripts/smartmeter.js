@@ -47,6 +47,9 @@ const STYLES = `
 .sm-minute-row { align-items:center; margin:2px 0; }
 .sm-hour-label { color:#67727c; font-size:11px; }
 .sm-minute { width:10px; height:14px; }
+.sm-periods { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; margin-top:16px; }
+.sm-periods h4 { margin-top:0; }
+@media (max-width:600px) { .sm-periods { grid-template-columns:1fr; } }
 .sm-outages { margin:12px 0 0; padding-left:18px; }
 .sm-outages li { margin:5px 0; }
 .sm-targets { display:flex; flex-wrap:wrap; gap:8px; margin:12px 0; }
@@ -115,6 +118,20 @@ function duration(seconds) {
 	const minutes = Math.floor(seconds % 3600 / 60);
 	const remainder = seconds % 60;
 	return (hours ? hours + ' ч ' : '') + (minutes || hours ? minutes + ' мин ' : '') + remainder + ' сек';
+}
+
+function clockTime(value) {
+	const match = String(value || '').match(/(?:^|[T ])(\d{2}:\d{2})(?::|$)/);
+	return match ? match[1] : '—';
+}
+
+function periodList(items, emptyText) {
+	return items && items.length ? E('ul', { 'class': 'sm-outages' },
+		items.map(item => E('li',
+			clockTime(item.started) + ' → ' + (item.ended ? clockTime(item.ended) : 'продолжается') +
+			' · ' + duration(item.duration_seconds) +
+			(item.interrupted ? ' · наблюдение прервалось' : '')))) :
+		E('p', { 'class': 'sm-muted' }, emptyText);
 }
 
 return view.extend({
@@ -232,7 +249,7 @@ return view.extend({
 			selected_day: this.selectedDay, today: dateKey(new Date()),
 			targets: this.lastServerTargets, current: null,
 			summary: { today: empty, week: empty, month: empty, all: empty },
-			days: [], minutes: [], outages: [] };
+			days: [], minutes: [], outages: [], uptimes: [] };
 	},
 
 	settingField: function(target, key, label, kind, extra) {
@@ -428,7 +445,7 @@ return view.extend({
 		this.statusNode.replaceChildren(E('p', [
 			E('span', { 'class': 'sm-badge ' + badgeClass }, label), ' ',
 			E('span', { 'class': 'sm-muted' }, current ?
-				'Последняя проверка: ' + current.time + ' · ' + current.reason : 'Проверок пока нет')
+				'Последняя проверка: ' + clockTime(current.time) + ' · ' + current.reason : 'Проверок пока нет')
 		]));
 		const cards = [
 			['Сегодня', data.summary.today],
@@ -520,17 +537,19 @@ return view.extend({
 			E('span', ''),
 			...['00', '10', '20', '30', '40', '50'].map(label => E('span', label))
 		]);
-		const outages = data.outages.length ? E('ul', { 'class': 'sm-outages' },
-			data.outages.map(item => E('li',
-				item.started + ' → ' + (item.ended || 'продолжается') +
-				' · ' + duration(item.duration_seconds) +
-				(item.interrupted ? ' · наблюдение прервалось' : '')))) :
-			E('p', { 'class': 'sm-muted' }, 'Зарегистрированных сбоев за этот день нет.');
 		this.dayNode.replaceChildren(
 			heading,
 			E('div', { 'class': 'sm-minute-scroll' }, [header, ...rows]),
-			E('h4', 'Периоды недоступности'),
-			outages
+			E('div', { 'class': 'sm-periods' }, [
+				E('div', [
+					E('h4', 'Периоды недоступности'),
+					periodList(data.outages, 'Зарегистрированных сбоев за этот день нет.')
+				]),
+				E('div', [
+					E('h4', 'Периоды доступности'),
+					periodList(data.uptimes, 'Зарегистрированных периодов доступности за этот день нет.')
+				])
+			])
 		);
 	},
 

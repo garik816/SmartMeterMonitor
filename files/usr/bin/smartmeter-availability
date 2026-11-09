@@ -369,6 +369,46 @@ def summary_counts(connection, first_day):
     }
 
 
+def availability_periods(connection, day_start, day_end, interval, now):
+    """Reconstruct observed uptime without joining separate monitor runs or gaps."""
+    periods = []
+    started = last_up = previous_ts = run_id = None
+    run_ended = None
+    stale_after = max(60, interval * 3)
+
+    def append(ended, interrupted):
+        if started is not None and started < day_end and (ended if ended is not None else now) >= day_start:
+            periods.append({
+                "started_at": started, "ended_at": ended, "interrupted": interrupted,
+                "started": format_time(started),
+                "ended": format_time(ended) if ended is not None else None,
+                "duration_seconds": max(0, (ended if ended is not None else now) - started),
+            })
+
+    rows = connection.execute(
+        "SELECT s.run_id,s.ts,s.status,r.ended_at FROM samples s "
+        "JOIN runs r ON r.id=s.run_id WHERE r.started_at < ? "
+        "AND (r.ended_at IS NULL OR r.ended_at >= ?) ORDER BY s.id",
+        (day_end, day_start),
+    )
+    for ident, timestamp, status, ended_at in rows:
+        if ident != run_id or (previous_ts is not None and timestamp - previous_ts > stale_after):
+            append(last_up, True)
+            started = last_up = None
+        run_id, run_ended, previous_ts = ident, ended_at, timestamp
+        if status == "up":
+            if started is None:
+                started = timestamp
+            last_up = timestamp
+        elif status == "down" and started is not None:
+            append(timestamp, False)
+            started = last_up = None
+    if started is not None:
+        interrupted = run_ended is not None or now - previous_ts > stale_after
+        append(last_up if interrupted else None, interrupted)
+    return list(reversed(periods[-30:]))
+
+
 def dashboard_data(connection, host, selected_day, days, interval):
     today = datetime.now().date()
     first_day = (today - timedelta(days=days - 1)).isoformat()
@@ -429,6 +469,7 @@ def dashboard_data(connection, host, selected_day, days, interval):
         "days": daily,
         "minutes": minute_rows,
         "outages": outages,
+        "uptimes": availability_periods(connection, day_start, day_end, interval, int(time.time())),
     }
 
 

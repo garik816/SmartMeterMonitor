@@ -40,7 +40,7 @@ def empty_data(target, day):
             "today": datetime.now().date().isoformat(), "selected_day": day,
             "interval_seconds": int(target["interval"]), "current": None,
             "summary": {period: dict(empty) for period in ("today", "week", "month", "all")},
-            "days": [], "minutes": [], "outages": []}
+            "days": [], "minutes": [], "outages": [], "uptimes": []}
 
 
 def detail(target, day):
